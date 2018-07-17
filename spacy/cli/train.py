@@ -1,6 +1,8 @@
 # coding: utf8
 from __future__ import unicode_literals, division, print_function
 
+import copy
+
 import plac
 from pathlib import Path
 import tqdm
@@ -8,6 +10,8 @@ from thinc.neural._classes.model import Model
 from timeit import default_timer as timer
 import json
 import shutil
+from collections import OrderedDict
+from tabulate import tabulate
 
 from ._messages import Messages
 from ..attrs import PROB, IS_OOV, CLUSTER, LANG
@@ -17,6 +21,22 @@ from .. import util
 from .. import about
 from .. import displacy
 from ..compat import json_dumps
+
+metrics_table = []
+
+display_metadata = OrderedDict(
+    ("Itn.", "itn"),
+    ("P.Loss", "dep_loss"),
+    ("N.Loss", "ner_loss"),
+    ("UAS", "uas"),
+    ("NER P.", "ents_p"),
+    ("NER R.", "ents_r"),
+    ("NER F.", "ents_f"),
+    ("Tag %", "tags_acc"),
+    ("Token %", "token_acc"),
+    ("cpu_wps", "cpu_wps"),
+    ("gpu_wps", "gpu_wps")
+)
 
 
 @plac.annotations(
@@ -120,7 +140,6 @@ def train(lang, output_dir, train_data, dev_data, n_iter=30, n_sents=0,
     optimizer = nlp.begin_training(lambda: corpus.train_tuples, device=use_gpu)
     nlp._optimizer = None
 
-    print("Itn.  Dep Loss  NER Loss  UAS     NER P.  NER R.  NER F.  Tag %   Token %  CPU WPS  GPU WPS")
     try:
         for i in range(n_iter):
             train_docs = corpus.train_docs(nlp, noise_level=0.0,
@@ -182,6 +201,10 @@ def train(lang, output_dir, train_data, dev_data, n_iter=30, n_sents=0,
                 util.set_env_log(True)
             print_progress(i, losses, scorer.scores, cpu_wps=cpu_wps,
                            gpu_wps=gpu_wps)
+
+        # print table bottom
+        print(tableprint.bottom(len(display_metadata)))
+
     finally:
         print("Saving model...")
         with nlp.use_params(optimizer.averages):
@@ -247,7 +270,8 @@ def _render_parses(i, to_render):
 
 
 def print_progress(itn, losses, dev_scores, cpu_wps=0.0, gpu_wps=0.0):
-    scores = {}
+    scores = copy.deepcopy(display_metadata)
+    scores["itn"] = itn
     for col in ['dep_loss', 'tag_loss', 'uas', 'tags_acc', 'token_acc',
                 'ents_p', 'ents_r', 'ents_f', 'cpu_wps', 'gpu_wps']:
         scores[col] = 0.0
@@ -257,20 +281,13 @@ def print_progress(itn, losses, dev_scores, cpu_wps=0.0, gpu_wps=0.0):
     scores.update(dev_scores)
     scores['cpu_wps'] = cpu_wps
     scores['gpu_wps'] = gpu_wps or 0.0
-    tpl = ''.join((
-        '{:<6d}',
-        '{dep_loss:<10.3f}',
-        '{ner_loss:<10.3f}',
-        '{uas:<8.3f}',
-        '{ents_p:<8.3f}',
-        '{ents_r:<8.3f}',
-        '{ents_f:<8.3f}',
-        '{tags_acc:<8.3f}',
-        '{token_acc:<9.3f}',
-        '{cpu_wps:<9.1f}',
-        '{gpu_wps:.1f}',
-    ))
-    print(tpl.format(itn, **scores))
+
+    metrics_table.append(scores.values())
+
+    metrics_string = tabulate(metrics_table, headers=display_metadata.keys(),
+                              tablefmt="pipe")
+    # print table row
+    tqdm.tqdm.write(metrics_string)
 
 
 def print_results(scorer):
